@@ -3,8 +3,8 @@ import pandas as pd
 from fredapi import Fred
 from datetime import datetime, timedelta
 
-# Set your FRED API key
-FRED_API_KEY = "YOUR_FRED_API_KEY"
+# Load API key from Streamlit secrets
+FRED_API_KEY = st.secrets["FRED_API_KEY"]
 fred = Fred(api_key=FRED_API_KEY)
 
 st.set_page_config(page_title="Recession Risk Dashboard", layout="centered")
