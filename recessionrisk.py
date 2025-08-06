@@ -1,87 +1,155 @@
+# recessionrisk.py
+
 import streamlit as st
 import pandas as pd
-from fredapi import Fred
 from datetime import datetime, timedelta
+from fredapi import Fred
+
+st.set_page_config(page_title="Recession Risk Dashboard", layout="wide")
 
 # Load API key from Streamlit secrets
 FRED_API_KEY = st.secrets["FRED_API_KEY"]
 fred = Fred(api_key=FRED_API_KEY)
 
-st.set_page_config(page_title="Recession Risk Dashboard", layout="centered")
-st.title("📉 Recession Risk Dashboard")
-st.caption("Powered by FRED Economic Data")
-
-# Define indicators and thresholds
-indicators = {
-    "M2SL": {"name": "M2 Money Supply YoY (%)", "threshold_low": 0, "threshold_high": -1},
-    "Credit_Spread": {"name": "Credit Spread (BAA - AAA)", "threshold_low": 1.5, "threshold_high": 2.5},
-    "Yield_Spread": {"name": "10Y - 2Y Yield Curve", "threshold_low": 0, "threshold_high": -0.5},
-    "USSLIND": {"name": "Leading Economic Index", "threshold_low": 100, "threshold_high": 98},
-    "UNRATE": {"name": "Unemployment Rate", "threshold_low": 4.5, "threshold_high": 5.5},
-    "HOUST": {"name": "Housing Starts", "threshold_low": 1.5e6, "threshold_high": 1.3e6},
-    "NAPM": {"name": "ISM Manufacturing PMI", "threshold_low": 50, "threshold_high": 47},
-    "UMCSENT": {"name": "Consumer Confidence", "threshold_low": 80, "threshold_high": 70}
+# Define economic indicators and their FRED series IDs
+INDICATORS = {
+    "M2 Money Supply (YoY%)": "M2SL",
+    "10Y-2Y Yield Spread (%)": ("GS10", "GS2"),
+    "Unemployment Rate (%)": "UNRATE",
+    "ISM Manufacturing PMI": "NAPMPI",
+    "Housing Starts (Thousands)": "HOUST",
+    "Consumer Confidence Index": "UMCSENT",
+    "LEI (Leading Economic Index)": "USSLIND",
+    "Credit Spread (BAA - AAA)": ("BAA", "AAA")
 }
 
-@st.cache_data
-def get_latest_value(series_id):
-    data = fred.get_series(series_id)
-    return data.dropna().iloc[-1]
+@st.cache_data(ttl=3600)
+def safe_get_series(series_id):
+    try:
+        series = fred.get_series(series_id).dropna()
+        if series.empty:
+            raise ValueError("Empty series returned")
+        return series
+    except Exception as e:
+        st.warning(f"Error retrieving {series_id}: {e}")
+        return pd.Series(dtype='float64')
 
-@st.cache_data
 def compute_indicators():
-    results = []
-    scores = []
+    results = {}
 
-    for key, meta in indicators.items():
-        if key == "Credit_Spread":
-            baa = get_latest_value("BAA")
-            aaa = get_latest_value("AAA")
-            value = baa - aaa
-        elif key == "Yield_Spread":
-            gs10 = get_latest_value("GS10")
-            gs2 = get_latest_value("GS2")
-            value = gs10 - gs2
-        elif key == "M2SL":
-            today = datetime.today()
-            last_year = today - timedelta(days=365)
-            m2_today = fred.get_series("M2SL").dropna().iloc[-1]
-            m2_last_year = fred.get_series("M2SL").asof(last_year)
-            value = ((m2_today - m2_last_year) / m2_last_year) * 100
-        else:
-            value = get_latest_value(key)
-
-        if value >= meta["threshold_low"]:
-            risk = 0
-        elif value >= meta["threshold_high"]:
-            risk = 1
-        else:
-            risk = 2
-
-        scores.append(risk)
-        results.append({
-            "Indicator": meta["name"],
-            "Value": round(value, 2),
-            "Risk Level": ["LOW", "MEDIUM", "HIGH"][risk]
-        })
-
-    avg_score = sum(scores) / len(scores)
-    if avg_score >= 1.5:
-        final_risk = "HIGH"
-    elif avg_score >= 0.75:
-        final_risk = "MEDIUM"
+    # M2 YoY%
+    m2 = safe_get_series("M2SL")
+    if not m2.empty:
+        m2_today = m2.iloc[-1]
+        m2_last_year = m2.asof(datetime.today() - timedelta(days=365))
+        results["M2 Money Supply (YoY%)"] = ((m2_today - m2_last_year) / m2_last_year) * 100
     else:
-        final_risk = "LOW"
+        results["M2 Money Supply (YoY%)"] = None
 
-    return results, final_risk
+    # Yield Curve (10Y - 2Y)
+    gs10 = safe_get_series("GS10")
+    gs2 = safe_get_series("GS2")
+    if not gs10.empty and not gs2.empty:
+        results["10Y-2Y Yield Spread (%)"] = gs10.iloc[-1] - gs2.iloc[-1]
+    else:
+        results["10Y-2Y Yield Spread (%)"] = None
 
-# Compute and display
-with st.spinner("Fetching latest economic data..."):
-    results, overall_risk = compute_indicators()
+    # Unemployment
+    unrate = safe_get_series("UNRATE")
+    results["Unemployment Rate (%)"] = unrate.iloc[-1] if not unrate.empty else None
 
-st.subheader("📊 Indicator Status")
-st.dataframe(pd.DataFrame(results))
+    # ISM PMI
+    pmi = safe_get_series("NAPMPI")
+    results["ISM Manufacturing PMI"] = pmi.iloc[-1] if not pmi.empty else None
 
-st.markdown("---")
-st.subheader("🧠 Overall Recession Risk")
-st.markdown(f"### 🚨 **{overall_risk}**", unsafe_allow_html=True)
+    # Housing Starts
+    hous = safe_get_series("HOUST")
+    results["Housing Starts (Thousands)"] = hous.iloc[-1] if not hous.empty else None
+
+    # Consumer Confidence
+    cci = safe_get_series("UMCSENT")
+    results["Consumer Confidence Index"] = cci.iloc[-1] if not cci.empty else None
+
+    # LEI
+    lei = safe_get_series("USSLIND")
+    results["LEI (Leading Economic Index)"] = lei.iloc[-1] if not lei.empty else None
+
+    # Credit Spread
+    baa = safe_get_series("BAA")
+    aaa = safe_get_series("AAA")
+    if not baa.empty and not aaa.empty:
+        results["Credit Spread (BAA - AAA)"] = baa.iloc[-1] - aaa.iloc[-1]
+    else:
+        results["Credit Spread (BAA - AAA)"] = None
+
+    return results
+
+def assess_risk(indicators):
+    score = 0
+    total = 0
+
+    # Assign weights or thresholds
+    if indicators["M2 Money Supply (YoY%)"] is not None:
+        total += 1
+        if indicators["M2 Money Supply (YoY%)"] < 0:
+            score += 1
+
+    if indicators["10Y-2Y Yield Spread (%)"] is not None:
+        total += 1
+        if indicators["10Y-2Y Yield Spread (%)"] < 0:
+            score += 1
+
+    if indicators["Unemployment Rate (%)"] is not None:
+        total += 1
+        if indicators["Unemployment Rate (%)"] > 5:
+            score += 1
+
+    if indicators["ISM Manufacturing PMI"] is not None:
+        total += 1
+        if indicators["ISM Manufacturing PMI"] < 45:
+            score += 1
+
+    if indicators["Housing Starts (Thousands)"] is not None:
+        total += 1
+        if indicators["Housing Starts (Thousands)"] < 1000:
+            score += 1
+
+    if indicators["Consumer Confidence Index"] is not None:
+        total += 1
+        if indicators["Consumer Confidence Index"] < 60:
+            score += 1
+
+    if indicators["LEI (Leading Economic Index)"] is not None:
+        total += 1
+        if indicators["LEI (Leading Economic Index)"] < 0:
+            score += 1
+
+    if indicators["Credit Spread (BAA - AAA)"] is not None:
+        total += 1
+        if indicators["Credit Spread (BAA - AAA)"] > 2.0:
+            score += 1
+
+    if total == 0:
+        return "UNKNOWN"
+
+    ratio = score / total
+    if ratio >= 0.6:
+        return "HIGH"
+    elif ratio >= 0.3:
+        return "MEDIUM"
+    else:
+        return "LOW"
+
+# ---------- UI ----------
+
+st.title("📉 Recession Risk Dashboard")
+
+with st.spinner("Fetching economic indicators..."):
+    indicators = compute_indicators()
+    risk = assess_risk(indicators)
+
+st.header(f"🛑 Overall Recession Risk: {risk}")
+
+st.subheader("📊 Indicator Summary")
+df = pd.DataFrame(indicators.items(), columns=["Indicator", "Latest Value"])
+st.dataframe(df.set_index("Indicator"), use_container_width=True)
