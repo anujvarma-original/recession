@@ -150,6 +150,26 @@ with st.spinner("Fetching economic indicators..."):
 
 st.header(f"🛑 Overall Recession Risk: {risk}")
 
-st.subheader("📊 Indicator Summary")
-df = pd.DataFrame(indicators.items(), columns=["Indicator", "Latest Value"])
+st.subheader("📊 Indicator Summary with Recession Thresholds")
+
+thresholds = {
+    "M2 Money Supply (YoY%)": "< 0%",
+    "10Y-2Y Yield Spread (%)": "< 0%",
+    "Unemployment Rate (%)": "> 5%",
+    "ISM Manufacturing PMI": "< 45",
+    "Housing Starts (Thousands)": "< 1000",
+    "Consumer Confidence Index": "< 60",
+    "LEI (Leading Economic Index)": "< 0",
+    "Credit Spread (BAA - AAA)": "> 2.0"
+}
+
+df = pd.DataFrame([
+    {
+        "Indicator": name,
+        "Latest Value": f"{value:.2f}" if value is not None else "N/A",
+        "Recession Threshold": thresholds.get(name, "N/A")
+    }
+    for name, value in indicators.items()
+])
+
 st.dataframe(df.set_index("Indicator"), use_container_width=True)
